@@ -8,31 +8,32 @@ import {
   Tooltip, ResponsiveContainer, Legend
 } from 'recharts';
 
+// Shapes matching actual backend responses
 interface PLData {
   revenue: number;
   cogs: number;
   gross_profit: number;
-  gross_margin: number;
+  gross_margin: string;
   expenses: number;
   net_profit: number;
-  net_margin: number;
   purchases: number;
   sales_count: number;
 }
 interface BestSeller {
   id: number; name: string; category: string; unit: string;
-  qty_sold: number; revenue: number; profit: number; margin: number;
+  total_qty: number; total_revenue: number; total_profit: number; avg_price: number;
 }
 interface MonthlyData {
-  month: string; label: string; sales: number; purchases: number; profit: number; expenses: number;
+  month: string; label: string; sales: number; purchases: number;
+  gross_profit: number; net_profit: number; expenses: number;
 }
 interface InventoryValue {
-  total_products: number; total_cost_value: number; total_selling_value: number;
-  potential_profit: number; categories: Array<{ category: string; items: number; cost_value: number; selling_value: number }>;
+  by_category: Array<{ category: string; product_count: number; cost_value: number; selling_value: number }>;
+  totals: { total_products: number; total_cost_value: number; total_selling_value: number };
 }
 
-const fmt = (n: number) => `₹${n.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
-const fmtPct = (n: number) => `${n.toFixed(1)}%`;
+const fmt = (n: number) => `₹${(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+const fmtPct = (n: number) => `${(n || 0).toFixed(1)}%`;
 const today = new Date().toISOString().split('T')[0];
 const firstOfMonth = today.slice(0, 7) + '-01';
 
@@ -44,9 +45,11 @@ export default function Reports() {
   const [monthly, setMonthly] = useState<MonthlyData[]>([]);
   const [invValue, setInvValue] = useState<InventoryValue | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     setLoading(true);
+    setError('');
     Promise.all([
       reportsApi.getProfitLoss({ from, to }),
       reportsApi.getBestSellers({ from, to, limit: 10 }),
@@ -57,7 +60,8 @@ export default function Reports() {
       setBestSellers(bsRes.data);
       setMonthly(monthlyRes.data);
       setInvValue(invRes.data);
-    }).finally(() => setLoading(false));
+    }).catch(() => setError('Failed to load reports. Please try again.'))
+      .finally(() => setLoading(false));
   }, [from, to]);
 
   if (loading) return (
@@ -65,6 +69,22 @@ export default function Reports() {
       <Loader2 className="animate-spin text-blue-800" size={32} />
     </div>
   );
+
+  if (error) return (
+    <div className="text-center py-12 text-red-600">{error}</div>
+  );
+
+  // Derived values
+  const netMargin = pl && pl.revenue > 0 ? (pl.net_profit / pl.revenue) * 100 : 0;
+  const potentialProfit = invValue
+    ? invValue.totals.total_selling_value - invValue.totals.total_cost_value
+    : 0;
+
+  // Enrich best sellers with calculated margin
+  const enrichedBestSellers = bestSellers.map(p => ({
+    ...p,
+    margin: p.total_revenue > 0 ? (p.total_profit / p.total_revenue) * 100 : 0,
+  }));
 
   return (
     <div className="space-y-6">
@@ -107,7 +127,7 @@ export default function Reports() {
             <div className="bg-green-50 rounded-xl p-4">
               <p className="text-xs text-gray-500 mb-1">Gross Profit</p>
               <p className="text-2xl font-bold text-green-700">{fmt(pl.gross_profit)}</p>
-              <p className="text-xs text-gray-400">Margin: {fmtPct(pl.gross_margin)}</p>
+              <p className="text-xs text-gray-400">Margin: {fmtPct(parseFloat(pl.gross_margin))}</p>
             </div>
             <div className="bg-red-50 rounded-xl p-4">
               <p className="text-xs text-gray-500 mb-1">Total Expenses</p>
@@ -116,8 +136,13 @@ export default function Reports() {
             </div>
           </div>
 
-          <div className="mt-4 p-4 rounded-xl border-2 border-dashed flex items-center justify-between flex-wrap gap-3"
-            style={{ borderColor: pl.net_profit >= 0 ? '#16a34a' : '#dc2626', backgroundColor: pl.net_profit >= 0 ? '#f0fdf4' : '#fef2f2' }}>
+          <div
+            className="mt-4 p-4 rounded-xl border-2 border-dashed flex items-center justify-between flex-wrap gap-3"
+            style={{
+              borderColor: pl.net_profit >= 0 ? '#16a34a' : '#dc2626',
+              backgroundColor: pl.net_profit >= 0 ? '#f0fdf4' : '#fef2f2',
+            }}
+          >
             <div>
               <p className="text-sm text-gray-600 font-medium">Net Profit / Loss</p>
               <p className="text-xs text-gray-400">After all expenses</p>
@@ -130,7 +155,7 @@ export default function Reports() {
                 <p className={`text-3xl font-bold ${pl.net_profit >= 0 ? 'text-green-700' : 'text-red-600'}`}>
                   {fmt(pl.net_profit)}
                 </p>
-                <p className="text-xs text-gray-500">Net margin: {fmtPct(pl.net_margin)}</p>
+                <p className="text-xs text-gray-500">Net margin: {fmtPct(netMargin)}</p>
               </div>
             </div>
           </div>
@@ -149,7 +174,7 @@ export default function Reports() {
               <Tooltip formatter={(value: number) => [`₹${value.toLocaleString('en-IN')}`, '']} />
               <Legend />
               <Line type="monotone" dataKey="sales" name="Sales" stroke="#1e40af" strokeWidth={2} dot={{ r: 4 }} />
-              <Line type="monotone" dataKey="profit" name="Net Profit" stroke="#16a34a" strokeWidth={2} dot={{ r: 4 }} />
+              <Line type="monotone" dataKey="net_profit" name="Net Profit" stroke="#16a34a" strokeWidth={2} dot={{ r: 4 }} />
               <Line type="monotone" dataKey="expenses" name="Expenses" stroke="#dc2626" strokeWidth={2} strokeDasharray="5 5" dot={{ r: 3 }} />
             </LineChart>
           </ResponsiveContainer>
@@ -157,7 +182,7 @@ export default function Reports() {
       )}
 
       {/* Best Sellers */}
-      {bestSellers.length > 0 && (
+      {enrichedBestSellers.length > 0 && (
         <div className="card overflow-hidden">
           <div className="px-5 py-4 border-b border-gray-100">
             <h3 className="font-semibold text-gray-800 flex items-center gap-2">
@@ -167,13 +192,13 @@ export default function Reports() {
           </div>
           <div className="p-5">
             <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={bestSellers.slice(0, 8)} layout="vertical" margin={{ left: 80 }}>
+              <BarChart data={enrichedBestSellers.slice(0, 8)} layout="vertical" margin={{ left: 80 }}>
                 <CartesianGrid strokeDasharray="3 3" horizontal={false} />
                 <XAxis type="number" tick={{ fontSize: 11 }} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}k`} />
                 <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} width={80} />
                 <Tooltip formatter={(v: number) => [`₹${v.toLocaleString('en-IN')}`, '']} />
-                <Bar dataKey="revenue" name="Revenue" fill="#1e40af" radius={[0, 4, 4, 0]} />
-                <Bar dataKey="profit" name="Profit" fill="#16a34a" radius={[0, 4, 4, 0]} />
+                <Bar dataKey="total_revenue" name="Revenue" fill="#1e40af" radius={[0, 4, 4, 0]} />
+                <Bar dataKey="total_profit" name="Profit" fill="#16a34a" radius={[0, 4, 4, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -191,14 +216,14 @@ export default function Reports() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {bestSellers.map((p, i) => (
+                {enrichedBestSellers.map((p, i) => (
                   <tr key={p.id} className="hover:bg-gray-50">
                     <td className="table-td font-bold text-gray-400">#{i + 1}</td>
                     <td className="table-td font-medium">{p.name}</td>
                     <td className="table-td text-xs text-gray-400">{p.category || '-'}</td>
-                    <td className="table-td">{p.qty_sold} {p.unit}</td>
-                    <td className="table-td font-semibold text-blue-700">{fmt(p.revenue)}</td>
-                    <td className="table-td font-semibold text-green-700">{fmt(p.profit)}</td>
+                    <td className="table-td">{p.total_qty} {p.unit}</td>
+                    <td className="table-td font-semibold text-blue-700">{fmt(p.total_revenue)}</td>
+                    <td className="table-td font-semibold text-green-700">{fmt(p.total_profit)}</td>
                     <td className="table-td">
                       <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${p.margin >= 20 ? 'bg-green-100 text-green-700' : p.margin >= 10 ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700'}`}>
                         {fmtPct(p.margin)}
@@ -222,30 +247,30 @@ export default function Reports() {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
             <div className="bg-purple-50 rounded-xl p-4">
               <p className="text-xs text-gray-500 mb-1">Total Products</p>
-              <p className="text-2xl font-bold text-purple-700">{invValue.total_products}</p>
+              <p className="text-2xl font-bold text-purple-700">{invValue.totals.total_products}</p>
             </div>
             <div className="bg-blue-50 rounded-xl p-4">
               <p className="text-xs text-gray-500 mb-1">Stock at Cost</p>
-              <p className="text-2xl font-bold text-blue-700">{fmt(invValue.total_cost_value)}</p>
+              <p className="text-2xl font-bold text-blue-700">{fmt(invValue.totals.total_cost_value)}</p>
             </div>
             <div className="bg-green-50 rounded-xl p-4">
               <p className="text-xs text-gray-500 mb-1">Stock at MRP</p>
-              <p className="text-2xl font-bold text-green-700">{fmt(invValue.total_selling_value)}</p>
+              <p className="text-2xl font-bold text-green-700">{fmt(invValue.totals.total_selling_value)}</p>
             </div>
             <div className="bg-orange-50 rounded-xl p-4">
               <p className="text-xs text-gray-500 mb-1">Potential Profit</p>
-              <p className="text-2xl font-bold text-orange-600">{fmt(invValue.potential_profit)}</p>
+              <p className="text-2xl font-bold text-orange-600">{fmt(potentialProfit)}</p>
             </div>
           </div>
-          {invValue.categories.length > 0 && (
+          {invValue.by_category.length > 0 && (
             <div>
               <h4 className="text-sm font-medium text-gray-600 mb-3">By Category</h4>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                {invValue.categories.map(c => (
+                {invValue.by_category.map(c => (
                   <div key={c.category} className="border border-gray-100 rounded-xl p-3">
                     <p className="text-xs font-semibold text-gray-600">{c.category || 'Uncategorized'}</p>
                     <p className="text-sm font-bold text-gray-800 mt-1">{fmt(c.selling_value)}</p>
-                    <p className="text-xs text-gray-400">{c.items} items · Cost: {fmt(c.cost_value)}</p>
+                    <p className="text-xs text-gray-400">{c.product_count} items · Cost: {fmt(c.cost_value)}</p>
                   </div>
                 ))}
               </div>
